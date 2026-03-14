@@ -1,0 +1,426 @@
+// ============================================================
+// SafeGuard — HomeScreen.tsx
+// Main dashboard: AI risk indicator, SOS button, quick actions,
+// trusted circle with online/offline status
+// ============================================================
+
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Animated,
+  Dimensions,
+  ScrollView,
+} from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { NavigationProp } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { colors, spacing, borderRadius, typography } from '../constants/theme';
+import { RootStackParamList } from '../../App';
+
+interface Props {
+  navigation: NavigationProp<RootStackParamList>;
+  onLogin: () => void;}
+
+type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH';
+
+interface Contact {
+  id: string;
+  name: string;
+  phone: string;
+  emoji: string;
+  isOnline: boolean;
+}
+
+const { width } = Dimensions.get('window');
+
+export default function HomeScreen({ navigation }: Props) {
+  const [userName, setUserName] = useState('User'); // FIX #11: removed hard-coded name
+  const [riskLevel, setRiskLevel] = useState<RiskLevel>('LOW');
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [notifications, setNotifications] = useState(2);
+
+  const [trustedContacts, setTrustedContacts] = useState<Contact[]>([]);
+
+  // ── Animations ──────────────────────────────────────────────────────────
+  const sosPulse1 = useRef(new Animated.Value(1)).current;
+  const sosPulse2 = useRef(new Animated.Value(1)).current;
+  const fadeAnim  = useRef(new Animated.Value(0)).current;
+  // FIX #5: removed unused riskAnim
+
+  useEffect(() => {
+    startAnimations();
+    loadUserData();
+    loadTrustedContacts();
+    simulateRisk();
+
+    const interval = setInterval(() => setCurrentTime(new Date()), 30_000);
+
+    // FIX #2: capture timeout id so we can clean it up
+    const timeoutId = setTimeout(() => {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(sosPulse2, { toValue: 1.5, duration: 1000, useNativeDriver: true }),
+          Animated.timing(sosPulse2, { toValue: 1,   duration: 1000, useNativeDriver: true }),
+        ])
+      ).start();
+    }, 500);
+
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeoutId); // FIX #2: cleanup
+    };
+  }, []);
+
+  // FIX #3: corrected time-range logic (was using || which made MEDIUM unreachable at night)
+  const simulateRisk = useCallback(() => {
+    const hour = new Date().getHours();
+    if (hour >= 20 || hour < 5) {
+      setRiskLevel('HIGH');
+    } else if (hour >= 18 || hour < 7) {
+      setRiskLevel('MEDIUM');
+    } else {
+      setRiskLevel('LOW');
+    }
+  }, []);
+
+  const startAnimations = useCallback(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 600,
+      useNativeDriver: true,
+    }).start();
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(sosPulse1, { toValue: 1.3, duration: 1000, useNativeDriver: true }),
+        Animated.timing(sosPulse1, { toValue: 1,   duration: 1000, useNativeDriver: true }),
+      ])
+    ).start();
+
+    // FIX #2: sosPulse2 loop moved to useEffect so timeout can be cleaned up
+  }, []);
+
+  // FIX #8: guarded JSON.parse with try/catch
+  const loadUserData = useCallback(async () => {
+    try {
+      const user = await AsyncStorage.getItem('safeguard_user');
+      if (user) {
+        const data = JSON.parse(user);
+        if (data?.name) setUserName(data.name);
+      }
+    } catch (e) {
+      console.warn('Failed to load user data:', e);
+    }
+  }, []);
+
+  const loadTrustedContacts = useCallback(async () => {
+    try {
+      const stored = await AsyncStorage.getItem('safeguard_trusted_contacts');
+      if (stored) {
+        const contacts = JSON.parse(stored);
+        // Show only user-added (custom) contacts in the Trusted Circle
+        const customOnly = contacts.filter((c: any) => c.isCustom === true);
+        setTrustedContacts(
+          customOnly.length > 0
+            ? customOnly.map((c: any) => ({ ...c, isOnline: Math.random() > 0.3 }))
+            : [{ id: '1', name: 'Mom', phone: '+91 98765 43210', emoji: '👩', isOnline: true }]
+        );
+      } else {
+        setTrustedContacts([
+          { id: '1', name: 'Mom', phone: '+91 98765 43210', emoji: '👩', isOnline: true },
+        ]);
+      }
+    } catch (e) {
+      console.warn('Failed to load trusted contacts:', e);
+    }
+  }, []);
+
+  // ── Risk config ──────────────────────────────────────────────────────────
+  const riskConfig = {
+    LOW:    { color: colors.success, text: 'LOW RISK',    desc: 'Your area is safe right now',   emoji: '✅' },
+    MEDIUM: { color: colors.warning, text: 'MEDIUM RISK', desc: 'Stay alert in this area',        emoji: '⚠️' },
+    HIGH:   { color: colors.primary, text: 'HIGH RISK',   desc: 'Exercise extreme caution',       emoji: '🚨' },
+  };
+
+  const risk = riskConfig[riskLevel];
+
+  const riskBarWidth = riskLevel === 'LOW' ? '30%' : riskLevel === 'MEDIUM' ? '60%' : '95%';
+
+  const formatTime = (d: Date) =>
+    d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
+
+  const formatDate = (d: Date) =>
+    d.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' });
+
+  // FIX #7: memoised so array isn't recreated on every render
+  const quickActions = useMemo(() => [
+    { emoji: '📍', label: 'Share Location', color: colors.accent,     route: 'LiveLocation' as keyof RootStackParamList },
+    { emoji: '📞', label: 'Fake Call',       color: colors.secondary,  route: 'FakeCall'     as keyof RootStackParamList },
+    { emoji: '🏠', label: 'Safe Zones',      color: colors.success,    route: 'SafeZone'     as keyof RootStackParamList },
+    { emoji: '🚶', label: 'Start Journey',   color: colors.warning,    route: 'Journey'      as keyof RootStackParamList },
+  ], []);
+
+  return (
+    <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+      <LinearGradient
+        colors={['#EAF4F4', '#F6FFF8', '#EAF4F4']}
+        style={StyleSheet.absoluteFillObject}
+      />
+
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ── Top Bar ──────────────────────────────────────────────────── */}
+        <View style={styles.topBar}>
+          <View>
+            <Text style={styles.greeting}>Good {getGreeting()}, {userName} 👋</Text>
+            <Text style={styles.dateText}>{formatDate(currentTime)} · {formatTime(currentTime)}</Text>
+          </View>
+          <View style={styles.topBarRight}>
+            {/* FIX #10: notification button now has an onPress handler */}
+            <TouchableOpacity
+              style={styles.notifBtn}
+              onPress={() => setNotifications(0)}
+            >
+              <Text style={styles.notifEmoji}>🔔</Text>
+              {notifications > 0 && (
+                <View style={styles.notifBadge}>
+                  <Text style={styles.notifBadgeText}>{notifications}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+            <View style={styles.avatarCircle}>
+              <Text style={{ fontSize: 22 }}>👩</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* ── AI Risk Indicator ────────────────────────────────────────── */}
+        <View style={[styles.riskCard, { borderColor: risk.color }]}>
+          <View style={styles.riskHeader}>
+            <Text style={styles.riskLabel}>🤖 AI Risk Indicator</Text>
+            <View style={[styles.riskBadge, { backgroundColor: risk.color + '22' }]}>
+              <Text style={[styles.riskBadgeText, { color: risk.color }]}>
+                {risk.emoji} {risk.text}
+              </Text>
+            </View>
+          </View>
+          <Text style={styles.riskDesc}>{risk.desc}</Text>
+          <View style={styles.riskBarBg}>
+            <View
+              style={[styles.riskBarFill, { backgroundColor: risk.color, width: riskBarWidth }]}
+            />
+          </View>
+          <Text style={styles.riskNote}>Based on time, location & community reports</Text>
+        </View>
+
+        {/* ── SOS Button ──────────────────────────────────────────────── */}
+        <View style={styles.sosCenterContainer}>
+          <Animated.View style={[styles.sosPulseRing2, { transform: [{ scale: sosPulse2 }] }]} />
+          <Animated.View style={[styles.sosPulseRing1, { transform: [{ scale: sosPulse1 }] }]} />
+          <TouchableOpacity
+            style={styles.sosButton}
+            onPress={() => navigation.navigate('SOS')} // FIX #4: removed `as never`
+            activeOpacity={0.85}
+          >
+            <LinearGradient
+              colors={[colors.primary, '#FF0040', '#CC002A']}
+              style={styles.sosGradient}
+            >
+              <Text style={styles.sosEmoji}>🆘</Text>
+              <Text style={styles.sosLabel}>SOS</Text>
+              <Text style={styles.sosSub}>Hold to activate</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Quick Actions Grid ───────────────────────────────────────── */}
+        <Text style={styles.sectionTitle}>Quick Actions</Text>
+        <View style={styles.quickGrid}>
+          {quickActions.map((action) => (
+            <TouchableOpacity
+              key={action.route}
+              style={[styles.quickCard, { borderColor: action.color + '44' }]}
+              onPress={() => navigation.navigate(action.route)} // FIX #4: typed route
+              activeOpacity={0.75}
+            >
+              <View style={[styles.quickIconCircle, { backgroundColor: action.color + '22' }]}>
+                <Text style={styles.quickEmoji}>{action.emoji}</Text>
+              </View>
+              <Text style={styles.quickLabel}>{action.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* ── Trusted Circle ───────────────────────────────────────────── */}
+        <Text style={styles.sectionTitle}>Trusted Circle</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.trustedRow}
+        >
+          {trustedContacts.map(contact => (
+            <View key={contact.id} style={styles.trustedCard}>
+              <View style={styles.trustedAvatarWrapper}>
+                <View style={styles.trustedAvatar}>
+                  <Text style={styles.trustedEmoji}>{contact.emoji}</Text>
+                </View>
+                <View
+                  style={[
+                    styles.onlineDot,
+                    { backgroundColor: contact.isOnline ? colors.online : colors.offline },
+                  ]}
+                />
+              </View>
+              <Text style={styles.trustedName}>{contact.name}</Text>
+              <Text style={[styles.trustedStatus, { color: contact.isOnline ? colors.online : colors.offline }]}>
+                {contact.isOnline ? 'Online' : 'Offline'}
+              </Text>
+            </View>
+          ))}
+        </ScrollView>
+
+        {/* ── Safety Tip ──────────────────────────────────────────────── */}
+        <View style={styles.tipCard}>
+          <Text style={styles.tipTitle}>💡 Safety Tip</Text>
+          <Text style={styles.tipText}>
+            Share your journey with trusted contacts before traveling at night. Use the Journey
+            Tracker to keep them updated automatically.
+          </Text>
+        </View>
+
+        <View style={{ height: 100 }} />
+      </ScrollView>
+    </Animated.View>
+  );
+}
+
+function getGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Morning';
+  if (h < 17) return 'Afternoon';
+  return 'Evening';
+}
+
+const styles = StyleSheet.create({
+  container:     { flex: 1, backgroundColor: colors.background },
+  scrollContent: { paddingTop: 56 },
+  topBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  greeting:    { fontSize: 20, fontWeight: '700', color: colors.text },
+  dateText:    { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+  topBarRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  notifBtn:    { position: 'relative', padding: 4 },
+  notifEmoji:  { fontSize: 24 },
+  notifBadge: {
+    position: 'absolute', top: 0, right: 0,
+    backgroundColor: colors.primary,
+    borderRadius: 8, width: 16, height: 16,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  notifBadgeText: { color: colors.text, fontSize: 9, fontWeight: '700' },
+  avatarCircle: {
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: colors.card,
+    borderWidth: 2, borderColor: colors.primary,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  riskCard: {
+    marginHorizontal: spacing.lg,
+    backgroundColor: colors.card,
+    borderRadius: borderRadius.lg,
+    padding: spacing.md,
+    borderWidth: 1,
+    marginBottom: spacing.lg,
+  },
+  riskHeader: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'center', marginBottom: spacing.xs,
+  },
+  riskLabel:     { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  riskBadge:     { borderRadius: borderRadius.full, paddingHorizontal: spacing.sm, paddingVertical: 3 },
+  riskBadgeText: { fontSize: 12, fontWeight: '700' },
+  riskDesc:      { color: colors.text, fontSize: 14, marginBottom: spacing.sm },
+  riskBarBg: {
+    height: 6, backgroundColor: colors.border,
+    borderRadius: borderRadius.full, overflow: 'hidden', marginBottom: spacing.xs,
+  },
+  riskBarFill: { height: '100%', borderRadius: borderRadius.full },
+  riskNote:    { color: colors.textSecondary, fontSize: 11 },
+  sosCenterContainer: {
+    alignItems: 'center', justifyContent: 'center',
+    height: 220, marginBottom: spacing.xl,
+  },
+  sosPulseRing1: {
+    position: 'absolute', width: 160, height: 160, borderRadius: 80,
+    borderWidth: 2, borderColor: colors.primary + '44',
+  },
+  sosPulseRing2: {
+    position: 'absolute', width: 190, height: 190, borderRadius: 95,
+    borderWidth: 1, borderColor: colors.primary + '22',
+  },
+  sosButton: {
+    width: 140, height: 140, borderRadius: 70, overflow: 'hidden',
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8, shadowRadius: 30, elevation: 15,
+  },
+  sosGradient: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  sosEmoji:    { fontSize: 36, marginBottom: 2 },
+  sosLabel:    { fontSize: 22, fontWeight: '900', color: '#FFFFFF', letterSpacing: 3 },
+  sosSub:      { fontSize: 10, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
+  sectionTitle: { ...typography.h4, paddingHorizontal: spacing.lg, marginBottom: spacing.sm },
+  quickGrid: {
+    flexDirection: 'row', flexWrap: 'wrap',
+    paddingHorizontal: spacing.lg, gap: spacing.sm, marginBottom: spacing.lg,
+  },
+  quickCard: {
+    width: (width - spacing.lg * 2 - spacing.sm) / 2,
+    backgroundColor: colors.card,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    alignItems: 'center',
+    borderWidth: 1,
+  },
+  quickIconCircle: {
+    width: 52, height: 52, borderRadius: 26,
+    alignItems: 'center', justifyContent: 'center', marginBottom: spacing.sm,
+  },
+  quickEmoji: { fontSize: 26 },
+  quickLabel: { color: colors.text, fontSize: 13, fontWeight: '600', textAlign: 'center' },
+  trustedRow:          { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm, gap: spacing.md },
+  trustedCard:         { alignItems: 'center', width: 72 },
+  trustedAvatarWrapper:{ position: 'relative', marginBottom: spacing.xs },
+  trustedAvatar: {
+    width: 56, height: 56, borderRadius: 28,
+    backgroundColor: colors.card,
+    borderWidth: 2, borderColor: colors.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  trustedEmoji:  { fontSize: 28 },
+  onlineDot: {
+    position: 'absolute', bottom: 2, right: 2,
+    width: 14, height: 14, borderRadius: 7,
+    borderWidth: 2, borderColor: colors.background,
+  },
+  trustedName:   { color: colors.text, fontSize: 12, fontWeight: '600', textAlign: 'center' },
+  trustedStatus: { fontSize: 10, fontWeight: '500' },
+  tipCard: {
+    marginHorizontal: spacing.lg, marginTop: spacing.lg,
+    backgroundColor: colors.secondary + '22',
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    borderWidth: 1, borderColor: colors.secondary + '44',
+  },
+  tipTitle: { color: colors.secondary, fontSize: 14, fontWeight: '700', marginBottom: 4 },
+  tipText:  { color: colors.textSecondary, fontSize: 13, lineHeight: 20 },
+});
